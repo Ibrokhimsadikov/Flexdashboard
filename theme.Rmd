@@ -1,0 +1,223 @@
+---
+title: "Flights from NYC to CLT "
+output: 
+  flexdashboard::flex_dashboard:
+    navbar:
+      - { icon: "fa-twitter", href: "https://twitter.com/", align: right}
+      - { icon: "fa-facebook", href: "https://www.facebook.com/", align: right}
+      - { icon: "fa-linkedin", href: "https://www.linkedin.com/", align: right}
+    orientation: row
+    vertical_layout: scroll
+    theme: default
+    source_code: embed
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(tidyverse)
+library(dplyr)
+library(nycflights13)
+library(hablar)
+library(ggChernoff)
+library(gganimate)
+library(dygraphs)
+library(zoo)
+library(xts)
+library(plotly)
+library(corrplot)
+library(data.table)
+library(mosaic)
+library(lubridate)
+library(reshape2)
+```
+
+```{r data}
+flights<-flights
+airlines<-airlines
+planes<-planes
+weather<-weather
+airports<-airports
+
+names(airlines)[2]='Airline_name'
+planes_selected<-planes%>%
+  select(tailnum, year, manufacturer, seats)
+names(planes_selected)[2]='Year_of_Plane'
+
+flights$date <- as.Date(with(flights, paste(year, month, day, sep="-")), "%Y-%m-%d")
+flights_airlines<-inner_join(flights,airlines, by='carrier')
+flights_airlines_planes<-left_join(flights_airlines, planes_selected, by='tailnum')
+weather_new<-weather%>%
+  select(origin, temp, dewp, humid, time_hour, visib, pressure, wind_speed, wind_dir)
+flp<-flights_airlines_planes%>%
+subset( select = -c(dep_time,  sched_dep_time, arr_time, sched_arr_time, hour, minute,  carrier, tailnum, flight) )%>%
+filter( dest == "CLT")%>%
+mutate(total_delay=dep_delay+arr_delay)%>%
+mutate(Speed=distance/(air_time/60))%>%
+convert(int(dep_delay, arr_delay, total_delay))%>%
+  mutate(Delaybyhour=total_delay/60)
+flpw<-inner_join(flp, weather_new,   by ='time_hour')
+```
+
+
+GENERAL 
+===================================== 
+  
+Row {data-height=110}
+-------------------------------------    
+
+### NYC->CLT Flights
+
+```{r}
+valueBox(14064, icon = "fa-plane", color="success")
+```
+
+### Arr.delay (in Hours)
+
+```{r}
+valueBox(2989, icon = "fa-random", color="primary")
+```
+
+### Dep.delay (in Hours)
+
+```{r}
+valueBox(2274, icon = "fa-random", color="warning" )
+```
+
+Row {data-height=460} 
+-------------------------------------  
+### Dive into Advanced Interaction 
+    
+```{r}
+K<-flp%>%
+  select(date,  origin, dep_delay, arr_delay)%>%
+  filter(arr_delay >= 0, dep_delay >=0)%>%
+   group_by(date, origin)%>%
+  summarise(Avg_delay = mean(arr_delay, na.rm=TRUE) + mean(dep_delay, na.rm = TRUE))%>%
+  spread(origin, Avg_delay)
+
+ K_ts<- xts(x = K, order.by = K$date)
+ 
+ dygraph(K_ts, main='Average Delay from NYC to CLT')%>%
+  dySeries("JFK", label = "JFK", color='red' ) %>%
+  dySeries("EWR", label = "EWR", color='blue') %>%
+  dySeries("LGA", label = "LGA", color='green') %>%
+  dyRangeSelector()%>%
+  dyCrosshair(direction = "both")%>%
+  dyHighlight(highlightCircleSize =5 
+             )%>%
+  dyLegend(width = 500)
+```
+
+
+ Row {data-width=500} {.tabset .tabset-fade}
+-------------------------------------
+    
+### AVERAGE DELAY BY MONTH AS OF 2013
+    
+```{r}
+avgdelay_Mo <- flights %>%
+  select (month, origin, dest, arr_delay, dep_delay) %>%
+  filter(arr_delay >= 0, dep_delay >=0) %>%
+  filter(dest== 'CLT') %>%
+  group_by(month, origin) %>%
+  summarise(avgdelay = mean(arr_delay, na.rm=TRUE) + mean(dep_delay, na.rm = TRUE))
+
+mymonths <- c("Jan","Feb","Mar",
+              "Apr","May","Jun",
+              "Jul","Aug","Sep",
+              "Oct","Nov","Dec")
+avgdelay_Mo$month <- mymonths[ avgdelay_Mo$month ]
+
+avgdelay_Mo$month <- factor(avgdelay_Mo$month, levels=c("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"))
+
+p <- plot_ly(avgdelay_Mo, x = ~avgdelay_Mo$month, y = ~avgdelay, type = "box")
+hide_legend(p)
+```
+    
+    
+### ROLL-UP SUMMARY
+
+```{r}
+p6 <- avgdelay_Mo %>%
+  ggplot(aes (x=month, y=avgdelay, color=origin)) +
+  geom_line(aes(group=origin)) +
+  geom_point() +
+  theme(legend.position="bottom")
+
+ggplotly(p6)
+
+```   
+
+
+EXPLORATORY {data-orientation=row}
+=====================================     
+
+Row {data-height=500} 
+-------------------------------------    
+### DELAY BY AIRLINE
+ 
+```{r  table manipulation for Airlines delays}
+flightcount <- flp %>% 
+  select(month, day, arr_delay, dep_delay, dest, Airline_name) %>%
+  filter(arr_delay >= 0, dep_delay >= 0) %>%
+   group_by(arr_delay,dep_delay, month, day, Airline_name) 
+
+JF <- as.data.table(flightcount) 
+
+mean2 = JF[, list(mean_departure_delay = mean(dep_delay, na.rm = TRUE), 
+   mean_arrival_delay = mean(arr_delay, na.rm = TRUE)), 
+   by = Airline_name] 
+
+JF = melt(mean2, id.vars = 'Airline_name') 
+
+p = ggplot(JF, aes(x = Airline_name, y = value, color=variable, group = variable)) +
+   geom_point()+ 
+   geom_line() +
+   theme_bw()+ 
+   labs(title = 'Mean arrival and departure delay by Airline', 
+      x = 'Airline', y = 'Delay')
+ggplotly(p)
+```
+ 
+ 
+ 
+ 
+column{data-height=500} 
+-------------------------------------     
+### DEPARTURE DELAY MOOD
+
+
+```{r }
+g<-flp%>%
+  filter(dep_delay>=0, arr_delay>=0)%>%
+  group_by(origin, month)%>%
+  summarise(Avg_Dep_delay=mean(dep_delay, na.rm = T),
+            Avg_Arr_delay=mean(arr_delay, na.rm=T))%>%
+  convert(chr(month))%>%
+  arrange((origin))
+ggplot(g) +
+  aes(month, Avg_Dep_delay,   smile = Avg_Dep_delay) +
+  geom_chernoff(fill = 'goldenrod1',  size=7)+
+  facet_wrap(~origin, scales='free_y')+
+  theme(legend.position="bottom")+
+ scale_smile_continuous(range = c(0, -1))
+
+
+```
+
+
+### CORRELATION MATRIX
+
+```{r}
+v<-flpw%>%
+  select(dep_delay,Speed, temp,dewp, humid, visib, pressure, wind_speed, wind_dir)%>%
+  filter(dep_delay>0)%>%
+  convert(num(dep_delay))
+M<-cor(v, use="pairwise.complete.obs")
+corrplot(M, method="color", type='upper', order="hclust",tl.col="black", tl.srt=30,
+   title ="Correlation with Dep_delay", 
+           mar=c(0,0,1,0) 
+         ) 
+```
+
+

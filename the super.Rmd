@@ -1,0 +1,285 @@
+---
+title: "Untitled"
+author: "SIR"
+date: "March 19, 2019"
+output: html_document
+---
+```{r setup, include=FALSE}
+library(tidyverse)
+library(dplyr)
+library(nycflights13)
+library(hablar)
+library(ggChernoff)
+library(gganimate)
+library(dygraphs)
+library(zoo)
+library(xts)
+library(plotly)
+library(corrplot)
+library(data.table)
+library(mosaic)
+library(lubridate)
+library(reshape2)
+
+```
+
+
+
+```{r data}
+flights<-flights
+airlines<-airlines
+planes<-planes
+weather<-weather
+airports<-airports
+```
+
+```{r wrangling in Airline dataset}
+names(airlines)[2]='Airline_name'
+planes_selected<-planes%>%
+  select(tailnum, year, manufacturer, seats)
+names(planes_selected)[2]='Year_of_Plane'
+```
+
+```{r merging 3 three columns into for and converting it into date format}
+flights$date <- as.Date(with(flights, paste(year, month, day, sep="-")), "%Y-%m-%d")
+
+```
+
+
+
+```{r joining flights with airlines}
+
+flights_airlines<-inner_join(flights,airlines, by='carrier')
+  
+  
+```
+
+```{r 1}
+flights_airlines_planes<-left_join(flights_airlines, planes_selected, by='tailnum')
+
+```
+
+```{r narrowing down our dataset specifically for CLT}
+flp<-flights_airlines_planes%>%
+subset( select = -c(dep_time,  sched_dep_time, arr_time, sched_arr_time, hour, minute,  carrier, tailnum, flight) )%>%
+filter( dest == "CLT")%>%
+mutate(total_delay=dep_delay+arr_delay)%>%
+mutate(Speed=distance/(air_time/60))%>%
+convert(int(dep_delay, arr_delay, total_delay))%>%
+  mutate(Delaybyhour=total_delay/60)
+
+```
+
+```{r removing unnecessary columns from weather dataset}
+weather_new<-weather%>%
+  select(origin, temp, dewp, humid, time_hour, visib, pressure, wind_speed, wind_dir)
+```
+
+```{r 2 }
+flpw<-inner_join(flp, weather_new,   by ='time_hour')
+
+```
+
+```{r 3 }
+V<flp%>%
+  group_by(origin)%>%
+  summarise(Flight=n(),
+            Delay=sum(total_delay, na.rm=T))%>%
+  mutate(Delay_hour=Delay/60)%>%
+  ggplot( mapping=aes(origin, Delay_hour)) +   
+  geom_bar(aes(fill =Flight ), position = "stack", stat="identity")
+
+```
+
+```{r 4 }
+g<-flp%>%
+  group_by(origin, month)%>%
+  summarise(Avg_Dep_delay=mean(dep_delay, na.rm = T),
+            Avg_Arr_delay=mean(arr_delay, na.rm=T))
+  
+mymonths <- c("Jan","Feb","Mar",
+              "Apr","May","Jun",
+              "Jul","Aug","Sep",
+              "Oct","Nov","Dec")
+g$month <- mymonths[ g$month ]
+g$month <- factor(g$month, levels=c("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"))
+g%>%
+  convert(chr(month))
+```
+
+```{r}
+
+g <- ggplot(g) +
+  aes(month, Avg_Dep_delay,   smile = Avg_Dep_delay) +
+  geom_chernoff(fill = 'goldenrod1',  size=6)+
+  facet_wrap(~origin, scales='free_y')+
+  theme(legend.position="bottom")
+  
+g + scale_smile_continuous(range = c(0, -1))
+
+```
+
+```{r 5 }
+g2<-flp%>%
+  group_by(Airline_name, month)%>%
+  summarise(Average=mean(total_delay, na.rm=T))%>%
+  mutate(Average_Delay_hour=Average/60)
+  
+   
+  
+g2
+
+```
+
+```{r 6}
+
+  ggplot(data = g2, 
+       mapping = aes(x = Airline_name, y = Average_Delay_hour, fill = Airline_name)) + 
+  geom_col()+
+   theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())+
+   transition_states(
+    month,
+    transition_length = 30,
+    state_length = 60
+  ) +
+  enter_fade() + 
+  exit_shrink() +
+  ease_aes('linear')+
+   ggtitle('Now showing {closest_state}',
+          subtitle = 'Frame {frame} of {nframes}')
+
+```
+
+```{r 7}
+K<-flp%>%
+  select(date,  origin, dep_delay, arr_delay)%>%
+  filter(arr_delay >= 0, dep_delay >=0)%>%
+   group_by(date, origin)%>%
+  summarise(Avg_delay = mean(arr_delay, na.rm=TRUE) + mean(dep_delay, na.rm = TRUE))%>%
+  spread(origin, Avg_delay)
+
+ K_ts<- xts(x = K, order.by = K$date)
+  
+
+ 
+
+
+ 
+ 
+```
+
+```{r 8}
+
+  
+
+dygraph(K_ts, main='Average Delay from NYC to CLT')%>%
+  dySeries("JFK", label = "JFK", color='red' ) %>%
+  dySeries("EWR", label = "EWR", color='blue') %>%
+  dySeries("LGA", label = "LGA", color='green') %>%
+  dyRangeSelector()%>%
+  dyCrosshair(direction = "both")%>%
+  dyHighlight(highlightCircleSize =5 
+             )%>%
+  dyLegend(width = 500)
+   
+```
+
+
+```{r 9}
+v<-flpw%>%
+  select(dep_delay,Speed, temp,dewp, humid, visib, pressure, wind_speed, wind_dir)%>%
+  filter(dep_delay>0)%>%
+  convert(num(dep_delay))
+```
+
+```{r}
+M<-cor(v, use="pairwise.complete.obs")
+
+ 
+```
+
+```{r}
+corrplot(M, method="color", type='upper', order="hclust",tl.col="black", tl.srt=30,
+   title ="Correlation with Dep_delay", 
+           mar=c(0,0,1,0) 
+         )    
+
+```
+
+```{r}
+g2<-flp%>%
+  select(dep_delay, arr_delay, month, Airline_name)%>%
+  filter(dep_delay>=0, arr_delay>=0)%>%
+  group_by(Airline_name, month )%>%
+  summarise(avg.delay =  mean(arr_delay, na.rm = TRUE) + 
+              mean(dep_delay, na.rm = TRUE))
+  
+g2
+
+```
+
+
+
+```{r  table manipulation for Airlines delays}
+flightcount <- flp %>% 
+  select(month, day, arr_delay, dep_delay, dest, Airline_name) %>%
+  filter(arr_delay >= 0, dep_delay >= 0) %>%
+   group_by(arr_delay,dep_delay, month, day, Airline_name) 
+
+JF <- as.data.table(flightcount) 
+
+mean2 = JF[, list(mean_departure_delay = mean(dep_delay, na.rm = TRUE), 
+   mean_arrival_delay = mean(arr_delay, na.rm = TRUE)), 
+   by = Airline_name] 
+
+JF = melt(mean2, id.vars = 'Airline_name') 
+```
+
+```{r 2 plot airline delay means}
+
+
+```
+
+
+```{r}
+avgdelay_Mo <- flights %>%
+  select (month, origin, dest, arr_delay, dep_delay) %>%
+  filter(arr_delay >= 0, dep_delay >=0) %>%
+  filter(dest== 'CLT') %>%
+  group_by(month, origin) %>%
+  summarise(avgdelay = mean(arr_delay, na.rm=TRUE) + mean(dep_delay, na.rm = TRUE))
+
+mymonths <- c("Jan","Feb","Mar",
+              "Apr","May","Jun",
+              "Jul","Aug","Sep",
+              "Oct","Nov","Dec")
+avgdelay_Mo$month <- mymonths[ avgdelay_Mo$month ]
+
+avgdelay_Mo$month <- factor(avgdelay_Mo$month, levels=c("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"))
+
+```
+
+```{r sesonality trend}
+p <- plot_ly(avgdelay_Mo, x = ~avgdelay_Mo$month, y = ~avgdelay, type = "box")
+hide_legend(p)
+
+```
+
+
+
+
+
+```{r}
+
+
+p6 <- avgdelay_Mo %>%
+  ggplot(aes (x=month, y=avgdelay, color=origin)) +
+  geom_line(aes(group=origin)) +
+  geom_point() +
+  theme(legend.position="bottom")+
+transition_reveal(month)
+p6
+
+```
